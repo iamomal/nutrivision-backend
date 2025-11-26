@@ -6,3 +6,4 @@ numpy>=2.1.0
 gunicorn==21.2.0
 python-dotenv==1.0.0
 anthropic==0.7.8
+pyjwt==2.8.0
