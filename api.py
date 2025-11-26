@@ -569,4 +569,12 @@ def set_user_goals(current_user_id):
     return jsonify({'message': 'Goals updated successfully'}), 200
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    import os
+    
+    # Get port from environment variable or use 5000 as default
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Check if we're in production or development
+    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
