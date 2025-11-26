@@ -1,0 +1,28 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+*.egg-info/
+venv/
+env/
+
+# Database
+*.db
+
+# Model files (too large for GitHub)
+*.h5
+*.keras
+
+# Node modules
+node_modules/
+
+# Uploads
+uploads/
+
+# Dataset (too large)
+food-101/
+
+# Environment variables
+.env
