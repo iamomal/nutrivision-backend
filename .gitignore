@@ -12,8 +12,6 @@ env/
 *.db
 
 # Model files (too large for GitHub)
-*.h5
-*.keras
 
 # Node modules
 node_modules/
