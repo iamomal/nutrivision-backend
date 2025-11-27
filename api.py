@@ -25,7 +25,7 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "https://nutrivisionincomplete.netlify.app",
+            "https://nutrivision2.netlify.app",
             "http://localhost:3000",  # For local development
             "http://localhost:5173"   # If using Vite locally
         ],
