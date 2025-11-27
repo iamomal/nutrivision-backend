@@ -21,7 +21,7 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Load model
-model = tf.keras.models.load_model('nutritional_analysis_model.keras')
+model = tf.keras.models.load_model('nutritional_analysis_model.h5')
 
 CLASS_NAMES = ['apple_pie', 'baby_back_ribs', 'baklava', 'beef_carpaccio', 'beef_tartare', 
                'beet_salad', 'beignets', 'bibimbap', 'bread_pudding', 'breakfast_burrito',
