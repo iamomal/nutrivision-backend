@@ -587,6 +587,328 @@ def set_user_goals(current_user_id):
     
     return jsonify({'message': 'Goals updated successfully'}), 200
 
+# Add this helper function for level calculation
+def calculate_user_level(total_points):
+    """Calculate user level based on total points"""
+    # Level progression: 0→1(100pts), 1→2(250pts), 2→3(500pts), etc.
+    level_thresholds = [0, 100, 250, 500, 1000, 2000, 3500, 5500, 8000, 11000, 15000]
+    
+    for level, threshold in enumerate(level_thresholds):
+        if total_points < threshold:
+            return {
+                'level': level,
+                'current_points': total_points,
+                'points_for_level': level_thresholds[level - 1] if level > 0 else 0,
+                'points_to_next': threshold - total_points if level < len(level_thresholds) else 0,
+                'next_level_points': threshold if level < len(level_thresholds) else None
+            }
+    
+    # Max level reached
+    return {
+        'level': len(level_thresholds),
+        'current_points': total_points,
+        'points_for_level': level_thresholds[-1],
+        'points_to_next': 0,
+        'next_level_points': None
+    }
+
+# Add achievement checking function
+def check_and_award_achievements(user_id):
+    """Check if user has earned any new achievements"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Get user's meal streak
+    cursor.execute('''
+        SELECT COUNT(DISTINCT DATE(logged_at)) as streak_days
+        FROM food_logs
+        WHERE user_id = ?
+        AND DATE(logged_at) >= DATE('now', '-7 days')
+    ''', (user_id,))
+    streak_result = cursor.fetchone()
+    streak_days = streak_result['streak_days'] if streak_result else 0
+    
+    # Get macro stats
+    cursor.execute('''
+        SELECT 
+            SUM(protein) as total_protein,
+            SUM(carbs) as total_carbs,
+            SUM(fat) as total_fat,
+            COUNT(*) as total_meals
+        FROM food_logs
+        WHERE user_id = ?
+    ''', (user_id,))
+    macro_stats = cursor.fetchone()
+    
+    # Define achievements
+    achievements = []
+    
+    # Streak achievements
+    if streak_days >= 7:
+        achievements.append({
+            'id': 'streak_7',
+            'name': 'Week Warrior',
+            'description': '7-day logging streak',
+            'points': 50,
+            'icon': '🔥'
+        })
+    if streak_days >= 21:
+        achievements.append({
+            'id': 'streak_21',
+            'name': 'Consistency King',
+            'description': '21-day logging streak',
+            'points': 150,
+            'icon': '👑'
+        })
+    if streak_days >= 42:
+        achievements.append({
+            'id': 'streak_42',
+            'name': 'Habit Master',
+            'description': '42-day logging streak',
+            'points': 300,
+            'icon': '🏆'
+        })
+    
+    # Protein achievements
+    if macro_stats and macro_stats['total_protein']:
+        if macro_stats['total_protein'] > 500:
+            achievements.append({
+                'id': 'protein_500',
+                'name': 'Protein Rookie',
+                'description': '500g total protein logged',
+                'points': 30,
+                'icon': '💪'
+            })
+        if macro_stats['total_protein'] > 2000:
+            achievements.append({
+                'id': 'protein_2000',
+                'name': 'Protein Pro',
+                'description': '2000g total protein logged',
+                'points': 100,
+                'icon': '🥩'
+            })
+    
+    # Meal count achievements
+    if macro_stats and macro_stats['total_meals']:
+        if macro_stats['total_meals'] >= 10:
+            achievements.append({
+                'id': 'meals_10',
+                'name': 'Getting Started',
+                'description': '10 meals logged',
+                'points': 20,
+                'icon': '🍽️'
+            })
+        if macro_stats['total_meals'] >= 50:
+            achievements.append({
+                'id': 'meals_50',
+                'name': 'Dedicated Logger',
+                'description': '50 meals logged',
+                'points': 75,
+                'icon': '📊'
+            })
+        if macro_stats['total_meals'] >= 100:
+            achievements.append({
+                'id': 'meals_100',
+                'name': 'Century Club',
+                'description': '100 meals logged',
+                'points': 200,
+                'icon': '🎯'
+            })
+    
+    # Check which achievements are new
+    new_achievements = []
+    for achievement in achievements:
+        cursor.execute('''
+            SELECT * FROM user_achievements 
+            WHERE user_id = ? AND achievement_id = ?
+        ''', (user_id, achievement['id']))
+        
+        if not cursor.fetchone():
+            # Award new achievement
+            cursor.execute('''
+                INSERT INTO user_achievements (user_id, achievement_id, earned_at, points_awarded)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, achievement['id'], datetime.now(), achievement['points']))
+            new_achievements.append(achievement)
+    
+    conn.commit()
+    conn.close()
+    
+    return new_achievements
+
+# New endpoint: Get dashboard stats
+@app.route('/api/dashboard/stats', methods=['GET'])
+@token_required
+def get_dashboard_stats(current_user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Get total lifetime points
+    cursor.execute('''
+        SELECT 
+            COALESCE(SUM(points_awarded), 0) as total_meal_points
+        FROM food_logs
+        WHERE user_id = ?
+    ''', (current_user_id,))
+    meal_points = cursor.fetchone()['total_meal_points']
+    
+    # Get achievement points
+    cursor.execute('''
+        SELECT COALESCE(SUM(points_awarded), 0) as total_achievement_points
+        FROM user_achievements
+        WHERE user_id = ?
+    ''', (current_user_id,))
+    achievement_points = cursor.fetchone()['total_achievement_points']
+    
+    total_points = meal_points + achievement_points
+    
+    # Calculate level
+    level_info = calculate_user_level(total_points)
+    
+    # Get today's nutrition totals
+    cursor.execute('''
+        SELECT 
+            COALESCE(SUM(calories), 0) as today_calories,
+            COALESCE(SUM(protein), 0) as today_protein,
+            COALESCE(SUM(carbs), 0) as today_carbs,
+            COALESCE(SUM(fat), 0) as today_fat
+        FROM food_logs
+        WHERE user_id = ? AND DATE(logged_at) = DATE('now')
+    ''', (current_user_id,))
+    today_nutrition = cursor.fetchone()
+    
+    # Get user's goals
+    cursor.execute('''
+        SELECT calorie_target, protein_target 
+        FROM user_goals 
+        WHERE user_id = ? AND is_active = 1
+    ''', (current_user_id,))
+    goals = cursor.fetchone()
+    
+    conn.close()
+    
+    return jsonify({
+        'level': level_info,
+        'today_nutrition': {
+            'calories': today_nutrition['today_calories'],
+            'protein': today_nutrition['today_protein'],
+            'carbs': today_nutrition['today_carbs'],
+            'fat': today_nutrition['today_fat']
+        },
+        'goals': {
+            'calorie_target': goals['calorie_target'] if goals else 2000,
+            'protein_target': goals['protein_target'] if goals else 120
+        }
+    }), 200
+
+# New endpoint: Get points history
+@app.route('/api/dashboard/points-history', methods=['GET'])
+@token_required
+def get_points_history(current_user_id):
+    days = request.args.get('days', 7, type=int)  # 7, 15, or 30
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            DATE(logged_at) as date,
+            SUM(points_awarded) as total_points
+        FROM food_logs
+        WHERE user_id = ? 
+        AND DATE(logged_at) >= DATE('now', ? || ' days')
+        GROUP BY DATE(logged_at)
+        ORDER BY date ASC
+    ''', (current_user_id, -days))
+    
+    history = [{'date': row['date'], 'points': row['total_points']} for row in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify({'points_history': history}), 200
+
+# New endpoint: Get macro ratios over time
+@app.route('/api/dashboard/macro-ratios', methods=['GET'])
+@token_required
+def get_macro_ratios(current_user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Get lifetime macro totals
+    cursor.execute('''
+        SELECT 
+            COALESCE(SUM(protein), 0) as total_protein,
+            COALESCE(SUM(carbs), 0) as total_carbs,
+            COALESCE(SUM(fat), 0) as total_fat
+        FROM food_logs
+        WHERE user_id = ?
+    ''', (current_user_id,))
+    
+    macros = cursor.fetchone()
+    conn.close()
+    
+    total = macros['total_protein'] + macros['total_carbs'] + macros['total_fat']
+    
+    if total == 0:
+        return jsonify({
+            'protein_percentage': 0,
+            'carbs_percentage': 0,
+            'fat_percentage': 0
+        }), 200
+    
+    return jsonify({
+        'protein_percentage': round((macros['total_protein'] / total) * 100, 1),
+        'carbs_percentage': round((macros['total_carbs'] / total) * 100, 1),
+        'fat_percentage': round((macros['total_fat'] / total) * 100, 1)
+    }), 200
+
+# New endpoint: Get top food categories
+@app.route('/api/dashboard/top-categories', methods=['GET'])
+@token_required
+def get_top_categories(current_user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            food_name,
+            COUNT(*) as count
+        FROM food_logs
+        WHERE user_id = ?
+        GROUP BY food_name
+        ORDER BY count DESC
+        LIMIT 5
+    ''', (current_user_id,))
+    
+    categories = [{'name': row['food_name'].replace('_', ' ').title(), 'count': row['count']} 
+                  for row in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify({'top_categories': categories}), 200
+
+# New endpoint: Get user achievements
+@app.route('/api/user/achievements', methods=['GET'])
+@token_required
+def get_user_achievements(current_user_id):
+    # Check for new achievements first
+    new_achievements = check_and_award_achievements(current_user_id)
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT * FROM user_achievements
+        WHERE user_id = ?
+        ORDER BY earned_at DESC
+    ''', (current_user_id,))
+    
+    achievements = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify({
+        'achievements': achievements,
+        'new_achievements': new_achievements
+    }), 200
+
 if __name__ == '__main__':
     import os
     

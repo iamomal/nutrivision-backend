@@ -101,6 +101,16 @@ def create_database():
         FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
     )
     ''')
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS user_achievements (
+        achievement_id TEXT PRIMARY KEY,
+        user_id INTEGER,
+        earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        points_awarded INTEGER DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    ''')
     
     conn.commit()
     conn.close()
