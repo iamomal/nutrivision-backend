@@ -22,7 +22,17 @@ if not os.path.exists('nutrition_app.db'):
     print("Database initialization complete!")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://nutrivisionincomplete.netlify.app",
+            "http://localhost:3000",  # For local development
+            "http://localhost:5173"   # If using Vite locally
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # Configuration
 app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
