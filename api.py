@@ -11,6 +11,15 @@ import numpy as np
 from PIL import Image
 import io
 import os
+from database import create_database
+from nutrition_data import populate_complete_nutrition_database
+
+# Initialize database if it doesn't exist
+if not os.path.exists('nutrition_app.db'):
+    print("Database not found. Creating database...")
+    create_database()
+    populate_complete_nutrition_database()
+    print("Database initialization complete!")
 
 app = Flask(__name__)
 CORS(app)
