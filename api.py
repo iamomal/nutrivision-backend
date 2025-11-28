@@ -16,6 +16,14 @@ from nutrition_data import populate_complete_nutrition_database
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# Auto-initialize PostgreSQL tables if they don't exist
+if os.environ.get('DATABASE_URL'):
+    try:
+        from init_db import init_database
+        init_database()
+    except:
+        pass  # Tables already exist
+
 # Initialize database if it doesn't exist
 if not os.path.exists('nutrition_app.db'):
     print("Database not found. Creating database...")
