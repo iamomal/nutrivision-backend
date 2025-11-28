@@ -13,6 +13,8 @@ import io
 import os
 from database import create_database
 from nutrition_data import populate_complete_nutrition_database
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Initialize database if it doesn't exist
 if not os.path.exists('nutrition_app.db'):
@@ -65,8 +67,14 @@ CLASS_NAMES = ['apple_pie', 'baby_back_ribs', 'baklava', 'beef_carpaccio', 'beef
 
 # Database helper
 def get_db():
-    conn = sqlite3.connect('nutrition_app.db')
-    conn.row_factory = sqlite3.Row
+    DATABASE_URL = os.environ.get('DATABASE_URL')
+    if DATABASE_URL:
+        # Production: PostgreSQL
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    else:
+        # Development: SQLite
+        conn = sqlite3.connect('nutrition_app.db')
+        conn.row_factory = sqlite3.Row
     return conn
 
 # JWT token decorator
@@ -105,7 +113,13 @@ def register():
     cursor = conn.cursor()
     
     # Check if user exists
-    cursor.execute('SELECT user_id FROM users WHERE username = ? OR email = ?', (username, email))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('SELECT user_id FROM users WHERE username = %s OR email = %s', (username, email))
+    else:
+        # SQLite
+        cursor.execute('SELECT user_id FROM users WHERE username = ? OR email = ?', (username, email))
+    
     if cursor.fetchone():
         conn.close()
         return jsonify({'message': 'User already exists'}), 409
@@ -115,18 +129,39 @@ def register():
     
     # Use a single transaction for both inserts
     try:
-        cursor.execute('''
-            INSERT INTO users (username, email, password_hash)
-            VALUES (?, ?, ?)
-        ''', (username, email, password_hash))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL with RETURNING
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash)
+                VALUES (%s, %s, %s) RETURNING user_id
+            ''', (username, email, password_hash))
+            result = cursor.fetchone()
+            user_id = result['user_id'] if result else None
+        else:
+            # SQLite
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash)
+                VALUES (?, ?, ?)
+            ''', (username, email, password_hash))
+            user_id = cursor.lastrowid
         
-        user_id = cursor.lastrowid
+        if not user_id:
+            conn.rollback()
+            return jsonify({'message': 'Registration failed'}), 500
         
         # Create default goal
-        cursor.execute('''
-            INSERT INTO user_goals (user_id, weekly_points_target, start_date)
-            VALUES (?, 100, date('now'))
-        ''', (user_id,))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('''
+                INSERT INTO user_goals (user_id, weekly_points_target, start_date)
+                VALUES (%s, 100, CURRENT_DATE)
+            ''', (user_id,))
+        else:
+            # SQLite
+            cursor.execute('''
+                INSERT INTO user_goals (user_id, weekly_points_target, start_date)
+                VALUES (?, 100, date('now'))
+            ''', (user_id,))
         
         conn.commit()
         
@@ -162,7 +197,13 @@ def login():
     cursor = conn.cursor()
     
     # Check if identifier is username or email
-    cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (identifier, identifier))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('SELECT * FROM users WHERE username = %s OR email = %s', (identifier, identifier))
+    else:
+        # SQLite
+        cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (identifier, identifier))
+    
     user = cursor.fetchone()
     
     if not user:
@@ -174,8 +215,15 @@ def login():
         return jsonify({'message': 'Invalid password'}), 401
     
     # Update last login
-    cursor.execute('UPDATE users SET last_login = ? WHERE user_id = ?', 
-                   (datetime.now(), user['user_id']))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('UPDATE users SET last_login = %s WHERE user_id = %s', 
+                       (datetime.now(), user['user_id']))
+    else:
+        # SQLite
+        cursor.execute('UPDATE users SET last_login = ? WHERE user_id = ?', 
+                       (datetime.now(), user['user_id']))
+    
     conn.commit()
     conn.close()
     
@@ -218,7 +266,14 @@ def predict_food(current_user_id):
     # Get nutrition info
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM food_nutrition WHERE food_name = ?', (food_name,))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('SELECT * FROM food_nutrition WHERE food_name = %s', (food_name,))
+    else:
+        # SQLite
+        cursor.execute('SELECT * FROM food_nutrition WHERE food_name = ?', (food_name,))
+    
     nutrition = cursor.fetchone()
     
     if nutrition:
@@ -234,11 +289,21 @@ def predict_food(current_user_id):
         }
     
     # Fetch user's goal to adjust points
-    cursor.execute('''
-        SELECT goal_type FROM user_goals 
-        WHERE user_id = ? AND is_active = 1
-        ORDER BY goal_id DESC LIMIT 1
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT goal_type FROM user_goals 
+            WHERE user_id = %s AND is_active = 1
+            ORDER BY goal_id DESC LIMIT 1
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT goal_type FROM user_goals 
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY goal_id DESC LIMIT 1
+        ''', (current_user_id,))
+    
     goal_row = cursor.fetchone()
     goal_type = goal_row['goal_type'] if goal_row else 'maintain'
     
@@ -252,14 +317,26 @@ def predict_food(current_user_id):
     img.save(filepath)
     
     # Log food
-    cursor.execute('''
-        INSERT INTO food_logs 
-        (user_id, food_name, confidence_score, image_path, meal_type, 
-         calories, protein, carbs, fat, points_awarded)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (current_user_id, food_name, confidence, filename, meal_type,
-          nutrition_data['calories'], nutrition_data['protein'], 
-          nutrition_data['carbs'], nutrition_data['fat'], points))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            INSERT INTO food_logs 
+            (user_id, food_name, confidence_score, image_path, meal_type, 
+             calories, protein, carbs, fat, points_awarded)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (current_user_id, food_name, confidence, filename, meal_type,
+              nutrition_data['calories'], nutrition_data['protein'], 
+              nutrition_data['carbs'], nutrition_data['fat'], points))
+    else:
+        # SQLite
+        cursor.execute('''
+            INSERT INTO food_logs 
+            (user_id, food_name, confidence_score, image_path, meal_type, 
+             calories, protein, carbs, fat, points_awarded)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (current_user_id, food_name, confidence, filename, meal_type,
+              nutrition_data['calories'], nutrition_data['protein'], 
+              nutrition_data['carbs'], nutrition_data['fat'], points))
     
     conn.commit()
     
@@ -355,21 +432,40 @@ def update_weekly_progress(user_id, points, nutrition):
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     
-    cursor.execute('''
-        INSERT INTO weekly_progress 
-        (user_id, week_start_date, week_end_date, total_points, meals_logged,
-         total_calories, total_protein, total_carbs, total_fat)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
-        ON CONFLICT(user_id, week_start_date) DO UPDATE SET
-            total_points = total_points + ?,
-            meals_logged = meals_logged + 1,
-            total_calories = total_calories + ?,
-            total_protein = total_protein + ?,
-            total_carbs = total_carbs + ?,
-            total_fat = total_fat + ?
-    ''', (user_id, week_start, week_end, points,
-          nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat'],
-          points, nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat']))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            INSERT INTO weekly_progress 
+            (user_id, week_start_date, week_end_date, total_points, meals_logged,
+             total_calories, total_protein, total_carbs, total_fat)
+            VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s)
+            ON CONFLICT(user_id, week_start_date) DO UPDATE SET
+                total_points = weekly_progress.total_points + %s,
+                meals_logged = weekly_progress.meals_logged + 1,
+                total_calories = weekly_progress.total_calories + %s,
+                total_protein = weekly_progress.total_protein + %s,
+                total_carbs = weekly_progress.total_carbs + %s,
+                total_fat = weekly_progress.total_fat + %s
+        ''', (user_id, week_start, week_end, points,
+              nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat'],
+              points, nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat']))
+    else:
+        # SQLite
+        cursor.execute('''
+            INSERT INTO weekly_progress 
+            (user_id, week_start_date, week_end_date, total_points, meals_logged,
+             total_calories, total_protein, total_carbs, total_fat)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+            ON CONFLICT(user_id, week_start_date) DO UPDATE SET
+                total_points = total_points + ?,
+                meals_logged = meals_logged + 1,
+                total_calories = total_calories + ?,
+                total_protein = total_protein + ?,
+                total_carbs = total_carbs + ?,
+                total_fat = total_fat + ?
+        ''', (user_id, week_start, week_end, points,
+              nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat'],
+              points, nutrition['calories'], nutrition['protein'], nutrition['carbs'], nutrition['fat']))
     
     conn.commit()
     conn.close()
@@ -384,17 +480,33 @@ def get_progress(current_user_id):
     today = datetime.now().date()
     week_start = today - timedelta(days=today.weekday())
     
-    cursor.execute('''
-        SELECT * FROM weekly_progress 
-        WHERE user_id = ? AND week_start_date = ?
-    ''', (current_user_id, week_start))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT * FROM weekly_progress 
+            WHERE user_id = %s AND week_start_date = %s
+        ''', (current_user_id, week_start))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT * FROM weekly_progress 
+            WHERE user_id = ? AND week_start_date = ?
+        ''', (current_user_id, week_start))
     
     progress = cursor.fetchone()
     
-    cursor.execute('''
-        SELECT weekly_points_target FROM user_goals 
-        WHERE user_id = ? AND is_active = 1
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT weekly_points_target FROM user_goals 
+            WHERE user_id = %s AND is_active = 1
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT weekly_points_target FROM user_goals 
+            WHERE user_id = ? AND is_active = 1
+        ''', (current_user_id,))
     
     goal = cursor.fetchone()
     conn.close()
@@ -423,12 +535,23 @@ def get_logs(current_user_id):
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT * FROM food_logs 
-        WHERE user_id = ? 
-        ORDER BY logged_at DESC 
-        LIMIT ?
-    ''', (current_user_id, limit))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT * FROM food_logs 
+            WHERE user_id = %s 
+            ORDER BY logged_at DESC 
+            LIMIT %s
+        ''', (current_user_id, limit))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT * FROM food_logs 
+            WHERE user_id = ? 
+            ORDER BY logged_at DESC 
+            LIMIT ?
+        ''', (current_user_id, limit))
     
     logs = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -441,7 +564,14 @@ def get_logs(current_user_id):
 def get_user_profile(current_user_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, username, email, created_at FROM users WHERE user_id = ?', (current_user_id,))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('SELECT user_id, username, email, created_at FROM users WHERE user_id = %s', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('SELECT user_id, username, email, created_at FROM users WHERE user_id = ?', (current_user_id,))
+    
     user = cursor.fetchone()
     conn.close()
     
@@ -467,15 +597,25 @@ def update_user_profile(current_user_id):
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-            UPDATE users 
-            SET username = ?, email = ?
-            WHERE user_id = ?
-        ''', (username, email, current_user_id))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('''
+                UPDATE users 
+                SET username = %s, email = %s
+                WHERE user_id = %s
+            ''', (username, email, current_user_id))
+        else:
+            # SQLite
+            cursor.execute('''
+                UPDATE users 
+                SET username = ?, email = ?
+                WHERE user_id = ?
+            ''', (username, email, current_user_id))
+        
         conn.commit()
         conn.close()
         return jsonify({'message': 'Profile updated successfully'}), 200
-    except sqlite3.IntegrityError:
+    except Exception as e:
         conn.close()
         return jsonify({'message': 'Username or email already exists'}), 409
 
@@ -489,7 +629,14 @@ def change_password(current_user_id):
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT password_hash FROM users WHERE user_id = ?', (current_user_id,))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('SELECT password_hash FROM users WHERE user_id = %s', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('SELECT password_hash FROM users WHERE user_id = ?', (current_user_id,))
+    
     user = cursor.fetchone()
     
     if not user or not check_password_hash(user['password_hash'], current_password):
@@ -497,7 +644,14 @@ def change_password(current_user_id):
         return jsonify({'message': 'Current password is incorrect'}), 401
     
     new_password_hash = generate_password_hash(new_password)
-    cursor.execute('UPDATE users SET password_hash = ? WHERE user_id = ?', (new_password_hash, current_user_id))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('UPDATE users SET password_hash = %s WHERE user_id = %s', (new_password_hash, current_user_id))
+    else:
+        # SQLite
+        cursor.execute('UPDATE users SET password_hash = ? WHERE user_id = ?', (new_password_hash, current_user_id))
+    
     conn.commit()
     conn.close()
     
@@ -536,11 +690,22 @@ def upload_profile_picture(current_user_id):
     
     # First check if column exists, if not add it
     try:
-        cursor.execute('UPDATE users SET profile_picture = ? WHERE user_id = ?', (filename, current_user_id))
-    except sqlite3.OperationalError:
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('UPDATE users SET profile_picture = %s WHERE user_id = %s', (filename, current_user_id))
+        else:
+            # SQLite
+            cursor.execute('UPDATE users SET profile_picture = ? WHERE user_id = ?', (filename, current_user_id))
+    except Exception as e:
         # Column doesn't exist, add it
-        cursor.execute('ALTER TABLE users ADD COLUMN profile_picture VARCHAR(255)')
-        cursor.execute('UPDATE users SET profile_picture = ? WHERE user_id = ?', (filename, current_user_id))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('ALTER TABLE users ADD COLUMN profile_picture VARCHAR(255)')
+            cursor.execute('UPDATE users SET profile_picture = %s WHERE user_id = %s', (filename, current_user_id))
+        else:
+            # SQLite
+            cursor.execute('ALTER TABLE users ADD COLUMN profile_picture VARCHAR(255)')
+            cursor.execute('UPDATE users SET profile_picture = ? WHERE user_id = ?', (filename, current_user_id))
     
     conn.commit()
     conn.close()
@@ -555,13 +720,19 @@ def get_profile_picture(current_user_id):
     cursor = conn.cursor()
     
     try:
-        cursor.execute('SELECT profile_picture FROM users WHERE user_id = ?', (current_user_id,))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('SELECT profile_picture FROM users WHERE user_id = %s', (current_user_id,))
+        else:
+            # SQLite
+            cursor.execute('SELECT profile_picture FROM users WHERE user_id = ?', (current_user_id,))
+        
         result = cursor.fetchone()
         conn.close()
         
         if result and result['profile_picture']:
             return jsonify({'profile_picture': result['profile_picture']}), 200
-    except sqlite3.OperationalError:
+    except Exception as e:
         # Column doesn't exist yet
         conn.close()
     
@@ -573,11 +744,22 @@ def get_profile_picture(current_user_id):
 def get_user_goals(current_user_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT * FROM user_goals 
-        WHERE user_id = ? AND is_active = 1
-        ORDER BY goal_id DESC LIMIT 1
-    ''', (current_user_id,))
+    
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT * FROM user_goals 
+            WHERE user_id = %s AND is_active = 1
+            ORDER BY goal_id DESC LIMIT 1
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT * FROM user_goals 
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY goal_id DESC LIMIT 1
+        ''', (current_user_id,))
+    
     goal = cursor.fetchone()
     conn.close()
     
@@ -600,15 +782,30 @@ def set_user_goals(current_user_id):
     cursor = conn.cursor()
     
     # Deactivate old goals
-    cursor.execute('UPDATE user_goals SET is_active = 0 WHERE user_id = ?', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('UPDATE user_goals SET is_active = 0 WHERE user_id = %s', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('UPDATE user_goals SET is_active = 0 WHERE user_id = ?', (current_user_id,))
     
     # Create new goal
-    cursor.execute('''
-        INSERT INTO user_goals 
-        (user_id, goal_type, weekly_points_target, calorie_target, protein_target, start_date, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, 1)
-    ''', (current_user_id, goal_type, weekly_points_target, calorie_target, 
-          protein_target, datetime.now().date()))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            INSERT INTO user_goals 
+            (user_id, goal_type, weekly_points_target, calorie_target, protein_target, start_date, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, 1)
+        ''', (current_user_id, goal_type, weekly_points_target, calorie_target, 
+              protein_target, datetime.now().date()))
+    else:
+        # SQLite
+        cursor.execute('''
+            INSERT INTO user_goals 
+            (user_id, goal_type, weekly_points_target, calorie_target, protein_target, start_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        ''', (current_user_id, goal_type, weekly_points_target, calorie_target, 
+              protein_target, datetime.now().date()))
     
     conn.commit()
     conn.close()
@@ -647,25 +844,50 @@ def check_and_award_achievements(user_id):
     cursor = conn.cursor()
     
     # Get user's meal streak
-    cursor.execute('''
-        SELECT COUNT(DISTINCT DATE(logged_at)) as streak_days
-        FROM food_logs
-        WHERE user_id = ?
-        AND DATE(logged_at) >= DATE('now', '-7 days')
-    ''', (user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT COUNT(DISTINCT DATE(logged_at)) as streak_days
+            FROM food_logs
+            WHERE user_id = %s
+            AND DATE(logged_at) >= CURRENT_DATE - INTERVAL '7 days'
+        ''', (user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT COUNT(DISTINCT DATE(logged_at)) as streak_days
+            FROM food_logs
+            WHERE user_id = ?
+            AND DATE(logged_at) >= DATE('now', '-7 days')
+        ''', (user_id,))
+    
     streak_result = cursor.fetchone()
     streak_days = streak_result['streak_days'] if streak_result else 0
     
     # Get macro stats
-    cursor.execute('''
-        SELECT 
-            SUM(protein) as total_protein,
-            SUM(carbs) as total_carbs,
-            SUM(fat) as total_fat,
-            COUNT(*) as total_meals
-        FROM food_logs
-        WHERE user_id = ?
-    ''', (user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                SUM(protein) as total_protein,
+                SUM(carbs) as total_carbs,
+                SUM(fat) as total_fat,
+                COUNT(*) as total_meals
+            FROM food_logs
+            WHERE user_id = %s
+        ''', (user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                SUM(protein) as total_protein,
+                SUM(carbs) as total_carbs,
+                SUM(fat) as total_fat,
+                COUNT(*) as total_meals
+            FROM food_logs
+            WHERE user_id = ?
+        ''', (user_id,))
+    
     macro_stats = cursor.fetchone()
     
     # Define achievements
@@ -746,17 +968,33 @@ def check_and_award_achievements(user_id):
     # Check which achievements are new
     new_achievements = []
     for achievement in achievements:
-        cursor.execute('''
-            SELECT * FROM user_achievements 
-            WHERE user_id = ? AND achievement_id = ?
-        ''', (user_id, achievement['id']))
+        if hasattr(cursor, 'execute'):
+            # PostgreSQL
+            cursor.execute('''
+                SELECT * FROM user_achievements 
+                WHERE user_id = %s AND achievement_id = %s
+            ''', (user_id, achievement['id']))
+        else:
+            # SQLite
+            cursor.execute('''
+                SELECT * FROM user_achievements 
+                WHERE user_id = ? AND achievement_id = ?
+            ''', (user_id, achievement['id']))
         
         if not cursor.fetchone():
             # Award new achievement
-            cursor.execute('''
-                INSERT INTO user_achievements (user_id, achievement_id, earned_at, points_awarded)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, achievement['id'], datetime.now(), achievement['points']))
+            if hasattr(cursor, 'execute'):
+                # PostgreSQL
+                cursor.execute('''
+                    INSERT INTO user_achievements (user_id, achievement_id, earned_at, points_awarded)
+                    VALUES (%s, %s, %s, %s)
+                ''', (user_id, achievement['id'], datetime.now(), achievement['points']))
+            else:
+                # SQLite
+                cursor.execute('''
+                    INSERT INTO user_achievements (user_id, achievement_id, earned_at, points_awarded)
+                    VALUES (?, ?, ?, ?)
+                ''', (user_id, achievement['id'], datetime.now(), achievement['points']))
             new_achievements.append(achievement)
     
     conn.commit()
@@ -772,20 +1010,41 @@ def get_dashboard_stats(current_user_id):
     cursor = conn.cursor()
     
     # Get total lifetime points
-    cursor.execute('''
-        SELECT 
-            COALESCE(SUM(points_awarded), 0) as total_meal_points
-        FROM food_logs
-        WHERE user_id = ?
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(points_awarded), 0) as total_meal_points
+            FROM food_logs
+            WHERE user_id = %s
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(points_awarded), 0) as total_meal_points
+            FROM food_logs
+            WHERE user_id = ?
+        ''', (current_user_id,))
+    
     meal_points = cursor.fetchone()['total_meal_points']
     
     # Get achievement points
-    cursor.execute('''
-        SELECT COALESCE(SUM(points_awarded), 0) as total_achievement_points
-        FROM user_achievements
-        WHERE user_id = ?
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT COALESCE(SUM(points_awarded), 0) as total_achievement_points
+            FROM user_achievements
+            WHERE user_id = %s
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT COALESCE(SUM(points_awarded), 0) as total_achievement_points
+            FROM user_achievements
+            WHERE user_id = ?
+        ''', (current_user_id,))
+    
     achievement_points = cursor.fetchone()['total_achievement_points']
     
     total_points = meal_points + achievement_points
@@ -794,25 +1053,48 @@ def get_dashboard_stats(current_user_id):
     level_info = calculate_user_level(total_points)
     
     # Get today's nutrition totals
-    cursor.execute('''
-        SELECT 
-            COALESCE(SUM(calories), 0) as today_calories,
-            COALESCE(SUM(protein), 0) as today_protein,
-            COALESCE(SUM(carbs), 0) as today_carbs,
-            COALESCE(SUM(fat), 0) as today_fat
-        FROM food_logs
-        WHERE user_id = ? AND DATE(logged_at) = DATE('now')
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(calories), 0) as today_calories,
+                COALESCE(SUM(protein), 0) as today_protein,
+                COALESCE(SUM(carbs), 0) as today_carbs,
+                COALESCE(SUM(fat), 0) as today_fat
+            FROM food_logs
+            WHERE user_id = %s AND DATE(logged_at) = CURRENT_DATE
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(calories), 0) as today_calories,
+                COALESCE(SUM(protein), 0) as today_protein,
+                COALESCE(SUM(carbs), 0) as today_carbs,
+                COALESCE(SUM(fat), 0) as today_fat
+            FROM food_logs
+            WHERE user_id = ? AND DATE(logged_at) = DATE('now')
+        ''', (current_user_id,))
+    
     today_nutrition = cursor.fetchone()
     
     # Get user's goals
-    cursor.execute('''
-        SELECT calorie_target, protein_target 
-        FROM user_goals 
-        WHERE user_id = ? AND is_active = 1
-    ''', (current_user_id,))
-    goals = cursor.fetchone()
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT calorie_target, protein_target 
+            FROM user_goals 
+            WHERE user_id = %s AND is_active = 1
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT calorie_target, protein_target 
+            FROM user_goals 
+            WHERE user_id = ? AND is_active = 1
+        ''', (current_user_id,))
     
+    goals = cursor.fetchone()
     conn.close()
     
     return jsonify({
@@ -838,16 +1120,30 @@ def get_points_history(current_user_id):
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute('''
-        SELECT 
-            DATE(logged_at) as date,
-            SUM(points_awarded) as total_points
-        FROM food_logs
-        WHERE user_id = ? 
-        AND DATE(logged_at) >= DATE('now', ? || ' days')
-        GROUP BY DATE(logged_at)
-        ORDER BY date ASC
-    ''', (current_user_id, -days))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                DATE(logged_at) as date,
+                SUM(points_awarded) as total_points
+            FROM food_logs
+            WHERE user_id = %s 
+            AND DATE(logged_at) >= CURRENT_DATE - INTERVAL %s DAYS
+            GROUP BY DATE(logged_at)
+            ORDER BY date ASC
+        ''', (current_user_id, days))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                DATE(logged_at) as date,
+                SUM(points_awarded) as total_points
+            FROM food_logs
+            WHERE user_id = ? 
+            AND DATE(logged_at) >= DATE('now', ? || ' days')
+            GROUP BY DATE(logged_at)
+            ORDER BY date ASC
+        ''', (current_user_id, -days))
     
     history = [{'date': row['date'], 'points': row['total_points']} for row in cursor.fetchall()]
     conn.close()
@@ -862,14 +1158,26 @@ def get_macro_ratios(current_user_id):
     cursor = conn.cursor()
     
     # Get lifetime macro totals
-    cursor.execute('''
-        SELECT 
-            COALESCE(SUM(protein), 0) as total_protein,
-            COALESCE(SUM(carbs), 0) as total_carbs,
-            COALESCE(SUM(fat), 0) as total_fat
-        FROM food_logs
-        WHERE user_id = ?
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(protein), 0) as total_protein,
+                COALESCE(SUM(carbs), 0) as total_carbs,
+                COALESCE(SUM(fat), 0) as total_fat
+            FROM food_logs
+            WHERE user_id = %s
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(protein), 0) as total_protein,
+                COALESCE(SUM(carbs), 0) as total_carbs,
+                COALESCE(SUM(fat), 0) as total_fat
+            FROM food_logs
+            WHERE user_id = ?
+        ''', (current_user_id,))
     
     macros = cursor.fetchone()
     conn.close()
@@ -896,16 +1204,30 @@ def get_top_categories(current_user_id):
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute('''
-        SELECT 
-            food_name,
-            COUNT(*) as count
-        FROM food_logs
-        WHERE user_id = ?
-        GROUP BY food_name
-        ORDER BY count DESC
-        LIMIT 5
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT 
+                food_name,
+                COUNT(*) as count
+            FROM food_logs
+            WHERE user_id = %s
+            GROUP BY food_name
+            ORDER BY count DESC
+            LIMIT 5
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT 
+                food_name,
+                COUNT(*) as count
+            FROM food_logs
+            WHERE user_id = ?
+            GROUP BY food_name
+            ORDER BY count DESC
+            LIMIT 5
+        ''', (current_user_id,))
     
     categories = [{'name': row['food_name'].replace('_', ' ').title(), 'count': row['count']} 
                   for row in cursor.fetchall()]
@@ -923,11 +1245,20 @@ def get_user_achievements(current_user_id):
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute('''
-        SELECT * FROM user_achievements
-        WHERE user_id = ?
-        ORDER BY earned_at DESC
-    ''', (current_user_id,))
+    if hasattr(cursor, 'execute'):
+        # PostgreSQL
+        cursor.execute('''
+            SELECT * FROM user_achievements
+            WHERE user_id = %s
+            ORDER BY earned_at DESC
+        ''', (current_user_id,))
+    else:
+        # SQLite
+        cursor.execute('''
+            SELECT * FROM user_achievements
+            WHERE user_id = ?
+            ORDER BY earned_at DESC
+        ''', (current_user_id,))
     
     achievements = [dict(row) for row in cursor.fetchall()]
     conn.close()
