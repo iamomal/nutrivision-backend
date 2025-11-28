@@ -133,17 +133,26 @@ def register():
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json()
-    username = data.get('username')
+    identifier = data.get('username')  # Can be username or email
     password = data.get('password')
+    
+    if not identifier or not password:
+        return jsonify({'message': 'Missing credentials'}), 400
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    
+    # Check if identifier is username or email
+    cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (identifier, identifier))
     user = cursor.fetchone()
     
-    if not user or not check_password_hash(user['password_hash'], password):
+    if not user:
         conn.close()
-        return jsonify({'message': 'Invalid credentials'}), 401
+        return jsonify({'message': 'Invalid username or email'}), 401
+    
+    if not check_password_hash(user['password_hash'], password):
+        conn.close()
+        return jsonify({'message': 'Invalid password'}), 401
     
     # Update last login
     cursor.execute('UPDATE users SET last_login = ? WHERE user_id = ?', 
