@@ -895,6 +895,10 @@ def get_user_achievements(current_user_id):
         'new_achievements': new_achievements
     }), 200
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok'}), 200
+
 if __name__ == '__main__':
     import os
     
