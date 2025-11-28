@@ -148,6 +148,48 @@ def register():
         return jsonify({'message': 'Registration failed'}), 500
     finally:
         conn.close()
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    identifier = data.get('username')  # Can be username or email
+    password = data.get('password')
+    
+    if not identifier or not password:
+        return jsonify({'message': 'Missing credentials'}), 400
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Check if identifier is username or email
+    cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (identifier, identifier))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return jsonify({'message': 'Invalid username or email'}), 401
+    
+    if not check_password_hash(user['password_hash'], password):
+        conn.close()
+        return jsonify({'message': 'Invalid password'}), 401
+    
+    # Update last login
+    cursor.execute('UPDATE users SET last_login = ? WHERE user_id = ?', 
+                   (datetime.now(), user['user_id']))
+    conn.commit()
+    conn.close()
+    
+    # Generate JWT token
+    token = jwt.encode({
+        'user_id': user['user_id'],
+        'exp': datetime.utcnow() + timedelta(days=7)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+    
+    return jsonify({
+        'token': token,
+        'user_id': user['user_id'],
+        'username': user['username']
+    }), 200
         
 # Food prediction endpoint
 
@@ -897,7 +939,7 @@ def get_user_achievements(current_user_id):
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'ok'}), 200
+    return jsonify({'status': 'ok'}), 200   
 
 if __name__ == '__main__':
     import os
