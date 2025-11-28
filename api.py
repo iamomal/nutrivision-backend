@@ -49,8 +49,14 @@ app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Load model
-model = tf.keras.models.load_model('nutritional_analysis_model.h5')
+# Load model lazily to avoid memory issues
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        model = tf.keras.models.load_model('nutritional_analysis_model.h5')
+    return model
 
 CLASS_NAMES = ['apple_pie', 'baby_back_ribs', 'baklava', 'beef_carpaccio', 'beef_tartare', 
                'beet_salad', 'beignets', 'bibimbap', 'bread_pudding', 'breakfast_burrito',
@@ -266,7 +272,7 @@ def predict_food(current_user_id):
     img_array = np.expand_dims(img_array, axis=0)
     
     # Predict
-    predictions = model.predict(img_array)
+    predictions = get_model().predict(img_array)
     top_idx = np.argmax(predictions[0])
     confidence = float(predictions[0][top_idx])
     food_name = CLASS_NAMES[top_idx]
