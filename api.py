@@ -105,75 +105,52 @@ def register():
     cursor = conn.cursor()
     
     # Check if user exists
-    cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (username, email))
+    cursor.execute('SELECT user_id FROM users WHERE username = ? OR email = ?', (username, email))
     if cursor.fetchone():
         conn.close()
         return jsonify({'message': 'User already exists'}), 409
     
     # Create user
     password_hash = generate_password_hash(password)
-    cursor.execute('''
-        INSERT INTO users (username, email, password_hash)
-        VALUES (?, ?, ?)
-    ''', (username, email, password_hash))
     
-    user_id = cursor.lastrowid
-    
-    # Create default goal
-    cursor.execute('''
-        INSERT INTO user_goals (user_id, weekly_points_target, start_date)
-        VALUES (?, 100, ?)
-    ''', (user_id, datetime.now().date()))
-    
-    conn.commit()
-    conn.close()
-    
-    return jsonify({'message': 'User created successfully', 'user_id': user_id}), 201
-
-@app.route('/api/auth/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    identifier = data.get('username')  # Can be username or email
-    password = data.get('password')
-    
-    if not identifier or not password:
-        return jsonify({'message': 'Missing credentials'}), 400
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    # Check if identifier is username or email
-    cursor.execute('SELECT * FROM users WHERE username = ? OR email = ?', (identifier, identifier))
-    user = cursor.fetchone()
-    
-    if not user:
+    # Use a single transaction for both inserts
+    try:
+        cursor.execute('''
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+        ''', (username, email, password_hash))
+        
+        user_id = cursor.lastrowid
+        
+        # Create default goal
+        cursor.execute('''
+            INSERT INTO user_goals (user_id, weekly_points_target, start_date)
+            VALUES (?, 100, date('now'))
+        ''', (user_id,))
+        
+        conn.commit()
+        
+        # Generate token immediately after creation
+        token = jwt.encode({
+            'user_id': user_id,
+            'exp': datetime.utcnow() + timedelta(days=7)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+        
+        return jsonify({
+            'message': 'User created successfully',
+            'token': token,
+            'user_id': user_id,
+            'username': username
+        }), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'message': 'Registration failed'}), 500
+    finally:
         conn.close()
-        return jsonify({'message': 'Invalid username or email'}), 401
-    
-    if not check_password_hash(user['password_hash'], password):
-        conn.close()
-        return jsonify({'message': 'Invalid password'}), 401
-    
-    # Update last login
-    cursor.execute('UPDATE users SET last_login = ? WHERE user_id = ?', 
-                   (datetime.now(), user['user_id']))
-    conn.commit()
-    conn.close()
-    
-    # Generate JWT token
-    token = jwt.encode({
-        'user_id': user['user_id'],
-        'exp': datetime.utcnow() + timedelta(days=7)
-    }, app.config['SECRET_KEY'], algorithm="HS256")
-    
-    return jsonify({
-        'token': token,
-        'user_id': user['user_id'],
-        'username': user['username']
-    }), 200
+        
+# Food prediction endpoint
 
-# Food prediction endpoint
-# Food prediction endpoint
 @app.route('/api/predict', methods=['POST'])
 @token_required
 def predict_food(current_user_id):
