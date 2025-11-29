@@ -55,7 +55,9 @@ model = None
 def get_model():
     global model
     if model is None:
+        print("Loading model...")
         model = tf.keras.models.load_model('nutritional_analysis_model.h5')
+        print("Model loaded successfully!")
     return model
 
 CLASS_NAMES = ['apple_pie', 'baby_back_ribs', 'baklava', 'beef_carpaccio', 'beef_tartare', 
