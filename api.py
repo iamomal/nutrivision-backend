@@ -15,6 +15,7 @@ from database import create_database
 from nutrition_data import populate_complete_nutrition_database
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import gc
 
 print("Starting NutriVision API...")
 
@@ -77,9 +78,17 @@ model = None
 def get_model():
     global model
     if model is None:
-        print("Loading model...")
+        print("Loading model with memory optimization...")
+        # Force garbage collection before loading
+        gc.collect()
+        
+        # Load model
         model = tf.keras.models.load_model('nutritional_analysis_model.h5')
         print("Model loaded successfully!")
+        
+        # Clear any cached tensors
+        tf.keras.backend.clear_session()
+        gc.collect()
     return model
 
 CLASS_NAMES = ['apple_pie', 'baby_back_ribs', 'baklava', 'beef_carpaccio', 'beef_tartare', 

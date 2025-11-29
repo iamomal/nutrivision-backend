@@ -3,14 +3,19 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import sqlite3
 
-# Get DATABASE_URL from environment or use hardcoded for testing
-DATABASE_URL = os.environ.get('DATABASE_URL') or "postgresql://nutrivision_fwut_user:5Wa1ox3atrukuQNMUfm8kGMWUuwJyxsj@dpg-d4ku5hc9c44c73f6vvn0-a/nutrivision_fwut"
-
 def init_database():
+    # Always get DATABASE_URL from environment variable
+    DATABASE_URL = os.environ.get('DATABASE_URL')
+    
+    if not DATABASE_URL:
+        print("⚠️ No DATABASE_URL found in environment, using SQLite for development")
+        create_sqlite_database()
+        return
+    
     try:
-        print("Attempting to connect to PostgreSQL...")
+        print(f"Attempting to connect to PostgreSQL...")
         
-        # Try connecting directly first
+        # Connect to PostgreSQL
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         cursor = conn.cursor()
         print("✅ Connected to PostgreSQL successfully!")
@@ -24,7 +29,7 @@ def init_database():
         
     except Exception as e:
         print(f"❌ PostgreSQL connection failed: {e}")
-        print("Falling back to SQLite for development...")
+        print("⚠️ Falling back to SQLite for development...")
         create_sqlite_database()
 
 def create_nutrition_tables(cursor):
