@@ -16,15 +16,44 @@ from nutrition_data import populate_complete_nutrition_database
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+print("Starting NutriVision API...")
+
+# Check for model file at startup
+MODEL_PATH = 'nutritional_analysis_model.h5'
+if not os.path.exists(MODEL_PATH):
+    print("⚠️ WARNING: Model file not found! Predictions will fail.")
+    print("Please upload nutritional_analysis_model.h5 to your repository or cloud storage.")
+else:
+    print(f"✅ Model file found: {MODEL_PATH}")
+
 # Auto-initialize PostgreSQL tables if they don't exist
 if os.environ.get('DATABASE_URL'):
     try:
+        print("Checking database tables...")
         from init_db import init_database
         init_database()
-    except:
-        pass  # Tables already exist
+        print("Database check complete")
+    except Exception as e:
+        print(f"Database initialization warning: {e}")
+        # Don't fail - tables might already exist
+
+if not os.path.exists('nutritional_analysis_model.h5'):
+    print("WARNING: Model file not found!")
 
 app = Flask(__name__)
+
+# Add this logging
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info("Flask app created successfully")
+
+CORS(app, resources={
+    # ... your CORS config
+})
+
+logger.info("CORS configured")
+
 CORS(app, resources={
     r"/*": {
         "origins": [
@@ -1279,7 +1308,13 @@ def get_user_achievements(current_user_id):
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'ok'}), 200   
+    status = {
+        'status': 'ok',
+        'model_loaded': model is not None,
+        'model_file_exists': os.path.exists('nutritional_analysis_model.h5'),
+        'database_url_set': bool(os.environ.get('DATABASE_URL'))
+    }
+    return jsonify(status), 200
 
 if __name__ == '__main__':
     import os

@@ -3,8 +3,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import sqlite3
 
-# Try multiple connection approaches
-DATABASE_URL = "postgresql://nutrivision_fwut_user:5Wa1ox3atrukuQNMUfm8kGMWUuwJyxsj@dpg-d4ku5hc9c44c73f6vvn0-a/nutrivision_fwut"
+# Get DATABASE_URL from environment or use hardcoded for testing
+DATABASE_URL = os.environ.get('DATABASE_URL') or "postgresql://nutrivision_fwut_user:5Wa1ox3atrukuQNMUfm8kGMWUuwJyxsj@dpg-d4ku5hc9c44c73f6vvn0-a/nutrivision_fwut"
 
 def init_database():
     try:
@@ -15,7 +15,7 @@ def init_database():
         cursor = conn.cursor()
         print("✅ Connected to PostgreSQL successfully!")
         
-        # Create the tables for your nutrition app
+        # Create the tables for your nutrition app (only if they don't exist)
         create_nutrition_tables(cursor)
         
         conn.commit()
@@ -28,19 +28,11 @@ def init_database():
         create_sqlite_database()
 
 def create_nutrition_tables(cursor):
-    """Create tables for the nutrition application"""
-    
-    # Drop existing tables if they exist
-    cursor.execute("DROP TABLE IF EXISTS food_logs CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS weekly_progress CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS user_achievements CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS user_goals CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS food_nutrition CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS users CASCADE")
+    """Create tables for the nutrition application (only if they don't exist)"""
     
     # Create users table
     cursor.execute('''
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             user_id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE NOT NULL,
             email VARCHAR(100) UNIQUE NOT NULL,
@@ -53,7 +45,7 @@ def create_nutrition_tables(cursor):
     
     # Create food_nutrition table (for storing nutrition data of foods)
     cursor.execute('''
-        CREATE TABLE food_nutrition (
+        CREATE TABLE IF NOT EXISTS food_nutrition (
             food_id SERIAL PRIMARY KEY,
             food_name VARCHAR(100) UNIQUE NOT NULL,
             calories INTEGER NOT NULL,
@@ -66,7 +58,7 @@ def create_nutrition_tables(cursor):
     
     # Create user_goals table
     cursor.execute('''
-        CREATE TABLE user_goals (
+        CREATE TABLE IF NOT EXISTS user_goals (
             goal_id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
             goal_type VARCHAR(50) NOT NULL DEFAULT 'maintain',
@@ -82,7 +74,7 @@ def create_nutrition_tables(cursor):
     
     # Create food_logs table (for logging user food entries)
     cursor.execute('''
-        CREATE TABLE food_logs (
+        CREATE TABLE IF NOT EXISTS food_logs (
             log_id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
             food_name VARCHAR(100) NOT NULL,
@@ -100,7 +92,7 @@ def create_nutrition_tables(cursor):
     
     # Create weekly_progress table
     cursor.execute('''
-        CREATE TABLE weekly_progress (
+        CREATE TABLE IF NOT EXISTS weekly_progress (
             progress_id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
             week_start_date DATE NOT NULL,
@@ -117,7 +109,7 @@ def create_nutrition_tables(cursor):
     
     # Create user_achievements table
     cursor.execute('''
-        CREATE TABLE user_achievements (
+        CREATE TABLE IF NOT EXISTS user_achievements (
             achievement_id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
             achievement_key VARCHAR(50) NOT NULL,
@@ -128,7 +120,7 @@ def create_nutrition_tables(cursor):
         )
     ''')
     
-    print("✅ Nutrition app tables created successfully!")
+    print("✅ Nutrition app tables created/verified successfully!")
 
 def create_sqlite_database():
     """Create SQLite database as fallback"""
